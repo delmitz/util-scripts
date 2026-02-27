@@ -65,7 +65,7 @@ Examples:
   send-telegram --set-bot-token "123456789:ABCdef..."
   send-telegram --set-chat-id 123456789
   send-telegram --list-jobs
-  send-telegram --cancel 1740000000_abcd1234
+  send-telegram --cancel 1740000000_0000_abcd1234
 EOF
 
     if ! resolve_bot_token > /dev/null 2>&1; then
@@ -181,10 +181,8 @@ Valid formats:
 
 # -------------------------------------------------------
 ensure_base_dir() {
-    if [[ ! -d "$BASE_DIR" ]]; then
-        mkdir -p "$BASE_DIR"
-        chmod 700 "$BASE_DIR"
-    fi
+    mkdir -p "$BASE_DIR"
+    chmod 700 "$BASE_DIR"
 }
 
 write_job() {
@@ -194,9 +192,16 @@ write_job() {
     mkdir -p "$JOB_DIR"
     chmod 700 "$JOB_DIR"
 
+    # seq: count existing jobs for the same send_at → FIFO within same timestamp
+    # rand: collision guard for concurrent registrations (order not guaranteed)
+    local seq=0 _f
+    for _f in "${JOB_DIR}/${send_at}_"*.job; do
+        [[ -f "$_f" ]] && seq=$(( seq + 1 ))
+    done
+
     local rand
     rand=$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' \n') || rand="${$}_${RANDOM}"
-    local job_id="${send_at}_${rand}"
+    local job_id="${send_at}_$(printf '%04d' "$seq")_${rand}"
     local job_file="${JOB_DIR}/${job_id}.job"
 
     local msg_b64
@@ -280,16 +285,22 @@ show_setup() {
 
     case "$choice" in
         1)
-            if [[ "$OS" == "Darwin" && ! -d "$system_bin" ]]; then
+            local do_copy=true
+            if [[ ! -d "$system_bin" ]]; then
                 echo "Creating ${system_bin}..."
-                sudo mkdir -p "$system_bin" || { echo "Failed to create ${system_bin}." >&2; }
+                if ! sudo mkdir -p "$system_bin"; then
+                    echo "Failed to create ${system_bin}." >&2
+                    do_copy=false
+                fi
             fi
-            echo "Running: sudo cp \"${SELF}\" ${system_bin}/send-telegram"
-            if sudo cp "$SELF" "${system_bin}/send-telegram" && \
-               sudo chmod +x "${system_bin}/send-telegram"; then
-                echo "Installed: ${system_bin}/send-telegram"
-            else
-                echo "Installation failed." >&2
+            if [[ "$do_copy" == true ]]; then
+                echo "Running: sudo cp \"${SELF}\" ${system_bin}/send-telegram"
+                if sudo cp "$SELF" "${system_bin}/send-telegram" && \
+                   sudo chmod +x "${system_bin}/send-telegram"; then
+                    echo "Installed: ${system_bin}/send-telegram"
+                else
+                    echo "Installation failed." >&2
+                fi
             fi
             ;;
         2)
@@ -477,6 +488,10 @@ run_daemon_loop() {
 
                 local message
                 message=$(printf '%s' "$msg_b64" | b64_decode 2>/dev/null)
+                if [[ -z "$message" ]]; then
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SKIP decode failed: $(basename "$job_file")"
+                    continue
+                fi
 
                 local result
                 if result=$(send_message "$bot_token" "$chat_id" "$message" 2>&1); then
@@ -614,7 +629,7 @@ Run 'send-telegram --set-bot-token <token>' or 'send-telegram --setup' for instr
         [[ -z "$MESSAGE" ]] && { usage; exit 0; }
 
         if [[ -n "$SCHEDULE" ]]; then
-            SEND_AT=$(parse_schedule "$SCHEDULE")
+            SEND_AT=$(parse_schedule "$SCHEDULE") || exit 1
 
             if [[ "$SEND_AT" -le "$(date +%s)" ]]; then
                 send_message "$BOT_TOKEN" "$CHAT_ID" "$MESSAGE"
