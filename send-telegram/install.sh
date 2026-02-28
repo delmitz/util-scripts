@@ -48,7 +48,7 @@ echo ""
 echo "  [1] System-wide  : ${SYSTEM_BIN}/${SCRIPT_NAME}  (requires sudo)"
 echo "  [2] Current user : ${USER_BIN}/${SCRIPT_NAME}"
 echo ""
-read -r -p "Choose [1/2]: " choice
+read -r -p "Choose [1/2]: " choice < /dev/tty
 
 case "$choice" in
     1)
