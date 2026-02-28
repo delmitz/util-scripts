@@ -149,8 +149,8 @@ parse_schedule() {
                 || die "Invalid time: $spec"
         fi
         if [[ "$target" -le "$now" ]]; then
-            echo "Warning: ${spec} has already passed today, sending immediately." >&2
-            target=$now
+            target=$((target + 86400))
+            echo "Warning: ${spec} has already passed today, scheduled for tomorrow." >&2
         fi
 
     elif [[ "$spec" =~ ^([0-9]{4})([0-9]{2})([0-9]{2})([0-9]{2})([0-9]{2})$ ]]; then

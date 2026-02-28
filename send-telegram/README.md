@@ -24,13 +24,9 @@ A shell script for sending Telegram messages from the command line. Supports sch
 
 ## Installation
 
-Run the guided installer:
-
 ```bash
-bash send-telegram --setup
+curl -fsSL https://raw.githubusercontent.com/delmitz/util-scripts/main/send-telegram/install.sh | bash
 ```
-
-This will offer to copy the script to your PATH automatically (system-wide or user-only), then walk you through configuration.
 
 ### Manual install
 
@@ -97,7 +93,14 @@ send-telegram -s 1430 <<< "At 14:30 today"
 send-telegram -s 202603011430 <<< "March 1st at 14:30"
 ```
 
-If the specified time has already passed, the message is sent immediately.
+**Behavior when the specified time has already passed:**
+
+| Format | Behavior |
+|--------|----------|
+| `HHmm` | Scheduled for the **same time tomorrow** |
+| `yyyyMMddHHmm` | Sent immediately |
+
+Multiple messages scheduled for the same timestamp are delivered in registration order (FIFO).
 
 ### Job management
 
@@ -106,7 +109,7 @@ If the specified time has already passed, the message is sent immediately.
 send-telegram --list-jobs
 
 # Cancel a scheduled job
-send-telegram --cancel 1740000000_abcd1234
+send-telegram --cancel 1740000000_0000_abcd1234
 ```
 
 ## How scheduled delivery works
@@ -114,7 +117,7 @@ send-telegram --cancel 1740000000_abcd1234
 ```
 send-telegram -s +30 <<< "msg"
   │
-  ├─ Creates ~/.send-telegram/jobs/<timestamp>_<id>.job
+  ├─ Creates ~/.send-telegram/jobs/<timestamp>_<seq>_<rand>.job
   ├─ Starts background daemon (if not already running)
   └─ Exits immediately
 
