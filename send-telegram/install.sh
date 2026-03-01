@@ -19,6 +19,16 @@ else
 fi
 USER_BIN="${HOME}/.local/bin"
 
+# Parse arguments
+CHOICE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --system) CHOICE=1; shift ;;
+        --user)   CHOICE=2; shift ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
 # Download: prefer wget, fallback to curl
 download() {
     local url="$1" dest="$2" use_sudo="${3:-false}"
@@ -48,9 +58,12 @@ echo ""
 echo "  [1] System-wide  : ${SYSTEM_BIN}/${SCRIPT_NAME}  (requires sudo)"
 echo "  [2] Current user : ${USER_BIN}/${SCRIPT_NAME}"
 echo ""
-read -r -p "Choose [1/2]: " choice < /dev/tty
 
-case "$choice" in
+if [[ -z "$CHOICE" ]]; then
+    read -r -p "Choose [1/2]: " CHOICE < /dev/tty
+fi
+
+case "$CHOICE" in
     1)
         if [[ ! -d "$SYSTEM_BIN" ]]; then
             echo "Creating ${SYSTEM_BIN}..."

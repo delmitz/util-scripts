@@ -4,6 +4,7 @@
 # Scheduled messages use a file-based job queue + daemon
 # ============================================================
 
+VERSION="202603011701"
 OS="$(uname)"
 
 BASE_DIR="${HOME}/.send-telegram"
@@ -29,6 +30,8 @@ resolve_bot_token() {
 # -------------------------------------------------------
 usage() {
     cat <<EOF
+send-telegram ver.${VERSION}
+
 Usage: send-telegram [-c <chat_id>] [-s <schedule>] <<< "message"
        echo "message" | send-telegram [-c <chat_id>] [-s <schedule>]
 
@@ -51,6 +54,7 @@ Configuration:
 
 Help:
   --setup                   Show installation guide
+  -v, --version             Show version
   -h, --help                Show this help
 
 Resolution order:  bot token: ${CONFIG_FILE} > error
@@ -580,6 +584,8 @@ while [[ $# -gt 0 ]]; do
             MODE="setup"; shift ;;
         --daemon-loop)
             MODE="daemon"; shift ;;
+        -v|--version)
+            echo "send-telegram ver.$VERSION"; exit 0 ;;
         -h|--help)
             usage; exit 0 ;;
         *)

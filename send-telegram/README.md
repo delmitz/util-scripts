@@ -28,6 +28,16 @@ A shell script for sending Telegram messages from the command line. Supports sch
 curl -fsSL https://raw.githubusercontent.com/delmitz/util-scripts/main/send-telegram/install.sh | bash
 ```
 
+Pass an argument to skip the interactive prompt:
+
+```bash
+# System-wide (non-interactive)
+curl -fsSL https://raw.githubusercontent.com/delmitz/util-scripts/main/send-telegram/install.sh | bash -s -- --system
+
+# Current user (non-interactive)
+curl -fsSL https://raw.githubusercontent.com/delmitz/util-scripts/main/send-telegram/install.sh | bash -s -- --user
+```
+
 ### Manual install
 
 ```bash
@@ -161,5 +171,6 @@ Configuration:
 
 Help:
   --setup                   Interactive installation guide
+  -v, --version             Show version
   -h, --help                Show help
 ```
