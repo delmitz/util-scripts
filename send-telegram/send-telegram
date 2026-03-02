@@ -4,7 +4,7 @@
 # Scheduled messages use a file-based job queue + daemon
 # ============================================================
 
-VERSION="202603011701"
+VERSION="202603022301"
 OS="$(uname)"
 
 BASE_DIR="${HOME}/.send-telegram"
@@ -111,6 +111,7 @@ send_message() {
     http_code=$(curl -s -X POST \
         "https://api.telegram.org/bot${bot_token}/sendMessage" \
         -d "chat_id=${chat_id}" \
+        -d "parse_mode=Markdown" \
         --data-urlencode "text=${text}" \
         -o "$tmp_file" \
         -w "%{http_code}")
