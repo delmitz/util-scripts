@@ -4,7 +4,7 @@
 # Scheduled messages use a file-based job queue + daemon
 # ============================================================
 
-VERSION="202603022301"
+VERSION="202603081301"
 OS="$(uname)"
 
 BASE_DIR="${HOME}/.send-telegram"
@@ -12,6 +12,8 @@ JOB_DIR="${BASE_DIR}/jobs"
 PID_FILE="${BASE_DIR}/daemon.pid"
 LOG_FILE="${BASE_DIR}/daemon.log"
 CONFIG_FILE="${BASE_DIR}/config"
+SYSTEM_CONFIG_DIR="/etc/send-telegram"
+SYSTEM_CONFIG_FILE="${SYSTEM_CONFIG_DIR}/config"
 CHECK_INTERVAL=60   # seconds between queue checks
 LOG_MAX_SIZE=512    # KB - rotate log when exceeded
 MAX_RETRIES=3       # max send attempts per job before giving up
@@ -20,9 +22,12 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 
 # -------------------------------------------------------
 # Returns the bot token from config, or returns 1 if not set
+# Resolution order: user config > system config
 resolve_bot_token() {
     local from_config
     from_config=$(grep '^BOT_TOKEN=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2-)
+    [[ -n "$from_config" ]] && echo "$from_config" && return 0
+    from_config=$(grep '^BOT_TOKEN=' "$SYSTEM_CONFIG_FILE" 2>/dev/null | cut -d= -f2-)
     [[ -n "$from_config" ]] && echo "$from_config" && return 0
     return 1
 }
@@ -49,16 +54,20 @@ Job management:
   --cancel <job_id>         Cancel a scheduled job by ID
 
 Configuration:
-  --set-bot-token <token>   Save bot token to ${CONFIG_FILE}
-  --set-chat-id <id>        Save default chat ID to ${CONFIG_FILE}
+  --set-bot-token <token>   Save bot token to user config
+  --set-chat-id <id>        Save default chat ID to user config
+  --global                  Write to system-wide config (${SYSTEM_CONFIG_FILE})
+                            instead of user config (use with --set-* options)
 
 Help:
   --setup                   Show installation guide
   -v, --version             Show version
   -h, --help                Show this help
 
-Resolution order:  bot token: ${CONFIG_FILE} > error
-                   chat_id:   -c option > ${CONFIG_FILE} > error
+Resolution order:  bot token: user config > system config > error
+                   chat_id:   -c option > user config > system config > error
+User config:       ${CONFIG_FILE}
+System config:     ${SYSTEM_CONFIG_FILE}
 
 Examples:
   echo "Hello" | send-telegram -c 123456789
@@ -190,6 +199,11 @@ ensure_base_dir() {
     chmod 700 "$BASE_DIR"
 }
 
+ensure_system_config_dir() {
+    mkdir -p "$SYSTEM_CONFIG_DIR"
+    chmod 755 "$SYSTEM_CONFIG_DIR"
+}
+
 write_job() {
     local bot_token="$1" chat_id="$2" send_at="$3" message="$4"
 
@@ -225,35 +239,56 @@ EOF
 
 # -------------------------------------------------------
 load_default_chat_id() {
-    [[ -f "$CONFIG_FILE" ]] || return 1
     local saved
     saved=$(grep '^DEFAULT_CHAT_ID=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2-)
+    [[ -n "$saved" ]] && echo "$saved" && return 0
+    saved=$(grep '^DEFAULT_CHAT_ID=' "$SYSTEM_CONFIG_FILE" 2>/dev/null | cut -d= -f2-)
     [[ -n "$saved" ]] && echo "$saved"
 }
 
 save_config_key() {
-    local key="$1" value="$2"
-    ensure_base_dir
-    if [[ -f "$CONFIG_FILE" ]] && grep -q "^${key}=" "$CONFIG_FILE"; then
+    local key="$1" value="$2" target="$3"
+    if [[ -f "$target" ]] && grep -q "^${key}=" "$target"; then
         if [[ "$OS" == "Darwin" ]]; then
-            sed -i '' "s|^${key}=.*|${key}=${value}|" "$CONFIG_FILE"
+            sed -i '' "s|^${key}=.*|${key}=${value}|" "$target"
         else
-            sed -i "s|^${key}=.*|${key}=${value}|" "$CONFIG_FILE"
+            sed -i "s|^${key}=.*|${key}=${value}|" "$target"
         fi
     else
-        echo "${key}=${value}" >> "$CONFIG_FILE"
+        echo "${key}=${value}" >> "$target"
     fi
-    chmod 600 "$CONFIG_FILE"
 }
 
 save_bot_token() {
-    save_config_key "BOT_TOKEN" "$1"
-    echo "Bot token saved. (${CONFIG_FILE})"
+    local global="$2"
+    local target
+    if [[ "$global" == true ]]; then
+        ensure_system_config_dir
+        target="$SYSTEM_CONFIG_FILE"
+        chmod 644 "$target" 2>/dev/null || true
+    else
+        ensure_base_dir
+        target="$CONFIG_FILE"
+    fi
+    save_config_key "BOT_TOKEN" "$1" "$target"
+    [[ "$target" == "$CONFIG_FILE" ]] && chmod 600 "$target"
+    echo "Bot token saved. (${target})"
 }
 
 save_chat_id() {
-    save_config_key "DEFAULT_CHAT_ID" "$1"
-    echo "Default chat_id saved: $1 (${CONFIG_FILE})"
+    local global="$2"
+    local target
+    if [[ "$global" == true ]]; then
+        ensure_system_config_dir
+        target="$SYSTEM_CONFIG_FILE"
+        chmod 644 "$target" 2>/dev/null || true
+    else
+        ensure_base_dir
+        target="$CONFIG_FILE"
+    fi
+    save_config_key "DEFAULT_CHAT_ID" "$1" "$target"
+    [[ "$target" == "$CONFIG_FILE" ]] && chmod 600 "$target"
+    echo "Default chat_id saved: $1 (${target})"
 }
 
 # -------------------------------------------------------
@@ -338,7 +373,8 @@ show_setup() {
     cat <<EOF
 
 Step 2: Set your Telegram bot token
-  send-telegram --set-bot-token "123456789:ABCdef..."
+  send-telegram --set-bot-token "123456789:ABCdef..."         # user config
+  send-telegram --set-bot-token "123456789:ABCdef..." --global  # system-wide
 
   To create a bot and get a token:
     1. Open Telegram, search for @BotFather
@@ -346,7 +382,8 @@ Step 2: Set your Telegram bot token
     3. Copy the token (format: 123456789:ABCdef...)
 
 Step 3: Save your default chat ID (optional, lets you omit -c)
-  send-telegram --set-chat-id YOUR_CHAT_ID
+  send-telegram --set-chat-id YOUR_CHAT_ID           # user config
+  send-telegram --set-chat-id YOUR_CHAT_ID --global  # system-wide
 
   To find your chat ID:
     1. Send any message to your bot
@@ -370,9 +407,21 @@ EOF
     default_chat=$(load_default_chat_id)
     chat_status="${default_chat:-(not set)}"
 
-    echo "Current config (${CONFIG_FILE}):"
-    echo "  Bot token:       ${token_status}"
-    echo "  Default chat_id: ${chat_status}"
+    echo "Current config:"
+    echo "  User config   (${CONFIG_FILE}):"
+    echo "    Bot token:       ${token_status}"
+    echo "    Default chat_id: ${chat_status}"
+    local sys_token_status sys_chat_status sys_default_chat
+    if grep -q '^BOT_TOKEN=' "$SYSTEM_CONFIG_FILE" 2>/dev/null; then
+        sys_token_status="configured"
+    else
+        sys_token_status="(not set)"
+    fi
+    sys_default_chat=$(grep '^DEFAULT_CHAT_ID=' "$SYSTEM_CONFIG_FILE" 2>/dev/null | cut -d= -f2-)
+    sys_chat_status="${sys_default_chat:-(not set)}"
+    echo "  System config (${SYSTEM_CONFIG_FILE}):"
+    echo "    Bot token:       ${sys_token_status}"
+    echo "    Default chat_id: ${sys_chat_status}"
 }
 
 # -------------------------------------------------------
@@ -557,6 +606,7 @@ CANCEL_JOB_ID=""
 SET_CHAT_ID_VAL=""
 SET_BOT_TOKEN_VAL=""
 INTERACTIVE=false
+GLOBAL=false
 
 [[ $# -eq 0 && -t 0 ]] && { usage; exit 0; }
 
@@ -581,6 +631,8 @@ while [[ $# -gt 0 ]]; do
         --cancel)
             [[ -z "${2-}" ]] && die "--cancel requires a job ID"
             MODE="cancel"; CANCEL_JOB_ID="$2"; shift 2 ;;
+        --global)
+            GLOBAL=true; shift ;;
         --setup)
             MODE="setup"; shift ;;
         --daemon-loop)
@@ -602,10 +654,10 @@ case "$MODE" in
         show_setup; exit 0 ;;
 
     set-bot-token)
-        save_bot_token "$SET_BOT_TOKEN_VAL"; exit 0 ;;
+        save_bot_token "$SET_BOT_TOKEN_VAL" "$GLOBAL"; exit 0 ;;
 
     set-chat-id)
-        save_chat_id "$SET_CHAT_ID_VAL"; exit 0 ;;
+        save_chat_id "$SET_CHAT_ID_VAL" "$GLOBAL"; exit 0 ;;
 
     list)
         list_jobs; exit 0 ;;

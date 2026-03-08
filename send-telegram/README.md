@@ -54,7 +54,7 @@ cp send-telegram ~/.local/bin/send-telegram
 
 ## Configuration
 
-Credentials are stored in `~/.send-telegram/config` (permissions: `600`).
+Credentials are stored per-user in `~/.send-telegram/config` (permissions: `600`).
 
 ```bash
 # Set bot token (required)
@@ -63,6 +63,18 @@ send-telegram --set-bot-token "123456789:ABCdef..."
 # Set default chat ID (optional — lets you omit -c)
 send-telegram --set-chat-id 123456789
 ```
+
+### System-wide config
+
+When the script is run by a different user (e.g., a web server process), it may not have access to your personal config. Use `--global` to save credentials to `/etc/send-telegram/config` (permissions: `644`), which is readable by all users.
+
+```bash
+# Save to system-wide config
+sudo send-telegram --set-bot-token "123456789:ABCdef..." --global
+sudo send-telegram --set-chat-id 123456789 --global
+```
+
+Resolution order: user config (`~/.send-telegram/config`) takes priority over system config (`/etc/send-telegram/config`).
 
 ### Getting a bot token
 
@@ -141,14 +153,17 @@ Daemon
 ## File structure
 
 ```
-~/.send-telegram/
-├── config          # Bot token and default chat ID (chmod 600)
-├── daemon.pid      # Daemon PID (present only while running)
-├── daemon.log      # Daemon log (rotated at 512 KB)
-├── daemon.log.1    # Previous log (one backup kept)
+~/.send-telegram/         # User-specific directory (chmod 700)
+├── config                # Bot token and default chat ID (chmod 600)
+├── daemon.pid            # Daemon PID (present only while running)
+├── daemon.log            # Daemon log (rotated at 512 KB)
+├── daemon.log.1          # Previous log (one backup kept)
 └── jobs/
-    ├── <id>.job    # Pending job (chmod 600)
-    └── <id>.retry  # Retry counter for failed jobs
+    ├── <id>.job          # Pending job (chmod 600)
+    └── <id>.retry        # Retry counter for failed jobs
+
+/etc/send-telegram/       # System-wide directory (chmod 755)
+└── config                # Shared bot token and chat ID (chmod 644)
 ```
 
 ## All options
@@ -166,8 +181,9 @@ Job management:
   --cancel <job_id>         Cancel a scheduled job
 
 Configuration:
-  --set-bot-token <token>   Save bot token
-  --set-chat-id <id>        Save default chat ID
+  --set-bot-token <token>   Save bot token to user config
+  --set-chat-id <id>        Save default chat ID to user config
+  --global                  Write to system-wide config (/etc/send-telegram/config)
 
 Help:
   --setup                   Interactive installation guide
