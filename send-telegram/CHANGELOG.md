@@ -1,5 +1,14 @@
 # Changelog
 
+## 202603100101 (2026-03-10)
+
+### Added
+- `-t` / `--token` option to pass bot token at runtime (overrides config)
+- Resolution order updated: `-t` option > user config > system config > error
+
+### Fixed
+- `save_bot_token` / `save_chat_id`: apply `chmod` after file creation, not before
+
 ## 202603081301 (2026-03-08)
 
 ### Added

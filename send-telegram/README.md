@@ -172,6 +172,7 @@ Daemon
 Usage: send-telegram [-c <chat_id>] [-s <schedule>] <<< "message"
 
 Send options:
+  -t, --token <token>       Telegram bot token (overrides config)
   -c, --chat-id <id>        Telegram chat ID
   -s, --schedule <spec>     +N / HHmm / yyyyMMddHHmm
   -i, --interactive         Read message from terminal interactively

@@ -4,7 +4,7 @@
 # Scheduled messages use a file-based job queue + daemon
 # ============================================================
 
-VERSION="202603081301"
+VERSION="202603100101"
 OS="$(uname)"
 
 BASE_DIR="${HOME}/.send-telegram"
@@ -41,6 +41,8 @@ Usage: send-telegram [-c <chat_id>] [-s <schedule>] <<< "message"
        echo "message" | send-telegram [-c <chat_id>] [-s <schedule>]
 
 Send options:
+  -t, --token <token>       Telegram bot token
+                            (can be omitted if configured)
   -c, --chat-id <id>        Telegram chat ID
                             (can be omitted if a default is saved)
   -s, --schedule <spec>     Schedule delivery:
@@ -64,7 +66,7 @@ Help:
   -v, --version             Show version
   -h, --help                Show this help
 
-Resolution order:  bot token: user config > system config > error
+Resolution order:  bot token: -t option > user config > system config > error
                    chat_id:   -c option > user config > system config > error
 User config:       ${CONFIG_FILE}
 System config:     ${SYSTEM_CONFIG_FILE}
@@ -265,13 +267,12 @@ save_bot_token() {
     if [[ "$global" == true ]]; then
         ensure_system_config_dir
         target="$SYSTEM_CONFIG_FILE"
-        chmod 644 "$target" 2>/dev/null || true
     else
         ensure_base_dir
         target="$CONFIG_FILE"
     fi
     save_config_key "BOT_TOKEN" "$1" "$target"
-    [[ "$target" == "$CONFIG_FILE" ]] && chmod 600 "$target"
+    if [[ "$target" == "$CONFIG_FILE" ]]; then chmod 600 "$target"; else chmod 644 "$target"; fi
     echo "Bot token saved. (${target})"
 }
 
@@ -281,13 +282,12 @@ save_chat_id() {
     if [[ "$global" == true ]]; then
         ensure_system_config_dir
         target="$SYSTEM_CONFIG_FILE"
-        chmod 644 "$target" 2>/dev/null || true
     else
         ensure_base_dir
         target="$CONFIG_FILE"
     fi
     save_config_key "DEFAULT_CHAT_ID" "$1" "$target"
-    [[ "$target" == "$CONFIG_FILE" ]] && chmod 600 "$target"
+    if [[ "$target" == "$CONFIG_FILE" ]]; then chmod 600 "$target"; else chmod 644 "$target"; fi
     echo "Default chat_id saved: $1 (${target})"
 }
 
@@ -600,6 +600,7 @@ run_daemon_loop() {
 # Argument parsing
 # -------------------------------------------------------
 CHAT_ID=""
+TOKEN=""
 SCHEDULE=""
 MODE="send"
 CANCEL_JOB_ID=""
@@ -612,6 +613,9 @@ GLOBAL=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -t|--token)
+            [[ -z "${2-}" ]] && die "$1 requires an argument"
+            TOKEN="$2"; shift 2 ;;
         -c|--chat-id)
             [[ -z "${2-}" ]] && die "$1 requires an argument"
             CHAT_ID="$2"; shift 2 ;;
@@ -669,8 +673,12 @@ case "$MODE" in
         run_daemon_loop ;;
 
     send)
-        BOT_TOKEN=$(resolve_bot_token) || die "Bot token is not configured.
+        if [[ -n "$TOKEN" ]]; then
+            BOT_TOKEN="$TOKEN"
+        else
+            BOT_TOKEN=$(resolve_bot_token) || die "Bot token is not configured.
 Run 'send-telegram --set-bot-token <token>' or 'send-telegram --setup' for instructions."
+        fi
 
         if [[ -z "$CHAT_ID" ]]; then
             CHAT_ID=$(load_default_chat_id)
