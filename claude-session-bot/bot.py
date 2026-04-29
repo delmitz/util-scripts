@@ -258,6 +258,40 @@ async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+async def cmd_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+
+    args = context.args or []
+    if not args:
+        await update.effective_chat.send_message("사용법: /create <프로젝트명>")
+        return
+
+    name = args[0]
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_\-\.]*$', name):
+        await update.effective_chat.send_message(
+            "프로젝트명은 영문자/숫자로 시작하고 영문자, 숫자, -, _, . 만 사용할 수 있습니다."
+        )
+        return
+
+    project_path = Path(config["projects_root"]) / name
+    if project_path.exists():
+        await update.effective_chat.send_message(f"이미 존재하는 프로젝트입니다: {name}")
+        return
+
+    project_path.mkdir()
+    logger.info("Project created: %s", project_path)
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🆕 세션 시작", callback_data=f"start:{name}"),
+        InlineKeyboardButton("닫기", callback_data="dismiss"),
+    ]])
+    await update.effective_chat.send_message(
+        f"프로젝트 생성 완료: {name}",
+        reply_markup=keyboard,
+    )
+
+
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
@@ -297,6 +331,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         kill_session(alias)
         await query.edit_message_text(f"[{alias}] 세션을 종료했습니다.")
 
+    elif action == "dismiss":
+        await query.edit_message_reply_markup(reply_markup=None)
+
 
 async def post_shutdown(app: Application) -> None:
     for alias in list(sessions.keys()):
@@ -314,6 +351,7 @@ async def post_init(app: Application) -> None:
         BotCommand("start", "Start a Claude session"),
         BotCommand("stop", "Stop a running session"),
         BotCommand("status", "Show running sessions"),
+        BotCommand("create", "Create a new project directory"),
     ]
     await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     await app.bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
@@ -340,6 +378,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("create", cmd_create))
     app.add_handler(CallbackQueryHandler(on_callback))
 
     logger.info("Starting bot...")
