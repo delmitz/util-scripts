@@ -40,6 +40,8 @@ The installer will prompt for:
 | `/stop` | Stop a running session (inline keyboard if multiple) |
 | `/status` | Show running sessions and their URLs |
 | `/create <name>` | Create a new project directory |
+| `/reset` | Force-kill all Claude Code processes |
+| `/updatebot` | Pull latest bot.py from GitHub and restart |
 
 After `/start`, select a project and choose **🆕 new session** or **↩️ resume last**.
 

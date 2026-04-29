@@ -7,6 +7,7 @@ import pty
 import re
 import select
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -24,6 +25,9 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 CONFIG_PATH = Path.home() / ".claude-session-bot" / "config.json"
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+BOT_SCRIPT = Path.home() / ".claude-session-bot" / "bot.py"
+PLIST_FILE = Path.home() / "Library" / "LaunchAgents" / "com.user.claude-session-bot.plist"
+REPO_RAW = "https://raw.githubusercontent.com/delmitz/util-scripts/main/claude-session-bot"
 URL_PATTERN = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
 ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 URL_TIMEOUT = 30
@@ -294,6 +298,72 @@ async def cmd_create(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+
+    own_pid = os.getpid()
+
+    managed = list(sessions.keys())
+    for alias in managed:
+        info = sessions.pop(alias, None)
+        if info:
+            try:
+                info["proc"].kill()
+            except Exception:
+                pass
+
+    extra_pids = []
+    try:
+        result = subprocess.run(["pgrep", "-f", "claude"], capture_output=True, text=True)
+        for token in result.stdout.split():
+            try:
+                pid = int(token)
+                if pid != own_pid:
+                    extra_pids.append(pid)
+            except ValueError:
+                pass
+        for pid in extra_pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    except Exception as e:
+        await update.effective_chat.send_message(f"Error during kill: {e}")
+        return
+
+    lines = []
+    if managed:
+        lines.append(f"Managed sessions killed: {', '.join(managed)}")
+    if extra_pids:
+        lines.append(f"Extra processes killed: {len(extra_pids)} (PID: {', '.join(map(str, extra_pids))})")
+    if not lines:
+        lines.append("No Claude processes found.")
+
+    await update.effective_chat.send_message("\n".join(lines))
+
+
+async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+
+    await update.effective_chat.send_message("Downloading latest bot.py...")
+
+    result = subprocess.run(
+        ["curl", "-fsSL", f"{REPO_RAW}/bot.py", "-o", str(BOT_SCRIPT)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        await update.effective_chat.send_message(f"Download failed:\n{result.stderr.strip()}")
+        return
+
+    await update.effective_chat.send_message("Update complete. Restarting service...")
+
+    subprocess.Popen(
+        ["bash", "-c", f"sleep 1 && launchctl unload '{PLIST_FILE}' 2>/dev/null; launchctl load '{PLIST_FILE}'"]
+    )
+
+
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
@@ -354,6 +424,8 @@ async def post_init(app: Application) -> None:
         BotCommand("stop", "Stop a running session"),
         BotCommand("status", "Show running sessions"),
         BotCommand("create", "Create a new project directory"),
+        BotCommand("reset", "Force-kill all Claude Code processes"),
+        BotCommand("updatebot", "Update bot to latest version and restart"),
     ]
     await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     await app.bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
@@ -381,6 +453,8 @@ def main() -> None:
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("create", cmd_create))
+    app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("updatebot", cmd_update))
     app.add_handler(CallbackQueryHandler(on_callback))
 
     logger.info("Starting bot...")
