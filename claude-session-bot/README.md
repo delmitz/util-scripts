@@ -39,6 +39,7 @@ The installer will prompt for:
 | `/start` | Start or resume a Claude session (inline keyboard) |
 | `/stop` | Stop a running session (inline keyboard if multiple) |
 | `/status` | Show running sessions and their URLs |
+| `/create <name>` | Create a new project directory |
 
 After `/start`, select a project and choose **🆕 new session** or **↩️ resume last**.
 

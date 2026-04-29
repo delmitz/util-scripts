@@ -97,10 +97,7 @@ echo
 echo "[3/5] Configuration"
 echo
 
-# Ensure prompts read from terminal even when piped via curl | bash
-exec < /dev/tty
-
-read -rp "Bot token (from BotFather): " BOT_TOKEN
+read -rp "Bot token (from BotFather): " BOT_TOKEN < /dev/tty
 if [ -z "$BOT_TOKEN" ]; then
     echo "ERROR: Bot token cannot be empty."
     exit 1
@@ -110,7 +107,7 @@ echo
 echo "How would you like to provide the chat ID?"
 echo "  1) Auto-detect (bot will wait for you to send a message in Telegram)"
 echo "  2) Enter manually"
-read -rp "Choice [1/2]: " CHAT_ID_CHOICE
+read -rp "Choice [1/2]: " CHAT_ID_CHOICE < /dev/tty
 
 if [ "${CHAT_ID_CHOICE:-1}" = "1" ]; then
     mkdir -p "$TMP_DIR"
@@ -151,12 +148,12 @@ PYEOF
     "$PYTHON_BIN" "$DETECT_SCRIPT" "$BOT_TOKEN" "$CHAT_ID_FILE"
     CHAT_ID="$(cat "$CHAT_ID_FILE" 2>/dev/null || true)"
     echo "Detected chat_id: $CHAT_ID"
-    read -rp "Is this correct? [Y/n]: " CONFIRM
+    read -rp "Is this correct? [Y/n]: " CONFIRM < /dev/tty
     if [[ "${CONFIRM:-Y}" =~ ^[Nn] ]]; then
-        read -rp "Chat ID: " CHAT_ID
+        read -rp "Chat ID: " CHAT_ID < /dev/tty
     fi
 else
-    read -rp "Chat ID: " CHAT_ID
+    read -rp "Chat ID: " CHAT_ID < /dev/tty
 fi
 
 if [ -z "$CHAT_ID" ]; then
@@ -165,7 +162,7 @@ if [ -z "$CHAT_ID" ]; then
 fi
 
 echo
-read -rp "Projects root directory (absolute path): " PROJECTS_ROOT
+read -rp "Projects root directory (absolute path): " PROJECTS_ROOT < /dev/tty
 PROJECTS_ROOT="${PROJECTS_ROOT/#\~/$HOME}"
 
 if [ ! -d "$PROJECTS_ROOT" ]; then

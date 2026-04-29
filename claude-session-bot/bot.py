@@ -25,6 +25,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 CONFIG_PATH = Path.home() / ".claude-session-bot" / "config.json"
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 URL_PATTERN = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
+ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 URL_TIMEOUT = 30
 
 config: dict = {}
@@ -107,7 +108,8 @@ def _capture_url(master_fd: int) -> str | None:
             if not chunk:
                 break
             buffer += chunk
-            m = URL_PATTERN.search(buffer.decode("utf-8", errors="replace"))
+            text = ANSI_ESCAPE.sub("", buffer.decode("utf-8", errors="replace"))
+            m = URL_PATTERN.search(text)
             if m:
                 return m.group(0)
     return None
