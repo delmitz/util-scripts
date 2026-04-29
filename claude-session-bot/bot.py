@@ -1,0 +1,350 @@
+import asyncio
+import json
+import logging
+import logging.handlers
+import os
+import pty
+import re
+import select
+import shutil
+import subprocess
+import threading
+import time
+from pathlib import Path
+
+from telegram import (
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeDefault,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+
+CONFIG_PATH = Path.home() / ".claude-session-bot" / "config.json"
+CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+URL_PATTERN = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
+URL_TIMEOUT = 30
+
+config: dict = {}
+sessions: dict = {}  # alias -> {"proc": Popen, "master_fd": int, "url": str}
+_bot_loop: asyncio.AbstractEventLoop | None = None
+_bot_app: Application | None = None
+
+logger = logging.getLogger(__name__)
+
+
+def setup_logging() -> None:
+    log_dir = Path.home() / ".claude-session-bot"
+    log_dir.mkdir(exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        log_dir / "bot.log", maxBytes=5 * 1024 * 1024, backupCount=3
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    root = logging.getLogger()
+    root.addHandler(handler)
+    root.addHandler(logging.StreamHandler())
+    root.setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
+
+
+def load_config() -> None:
+    global config
+    with open(CONFIG_PATH) as f:
+        config = json.load(f)
+
+
+def get_projects() -> list[str]:
+    root = Path(config["projects_root"])
+    return sorted(
+        d.name for d in root.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    )
+
+
+def find_latest_session_uuid(alias: str) -> str | None:
+    project_path = Path(config["projects_root"]) / alias
+    encoded = str(project_path).replace("/", "-")
+    sessions_dir = CLAUDE_PROJECTS_DIR / encoded
+    if not sessions_dir.exists():
+        return None
+    files = list(sessions_dir.glob("*.jsonl"))
+    if not files:
+        return None
+    return max(files, key=lambda f: f.stat().st_mtime).stem
+
+
+def is_authorized(update: Update) -> bool:
+    return update.effective_chat.id == config["allowed_chat_id"]
+
+
+def kill_session(alias: str) -> None:
+    if alias not in sessions:
+        return
+    proc = sessions.pop(alias)["proc"]
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+
+
+def _capture_url(master_fd: int) -> str | None:
+    buffer = b""
+    deadline = time.monotonic() + URL_TIMEOUT
+    while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        try:
+            r, _, _ = select.select([master_fd], [], [], min(remaining, 1.0))
+        except (ValueError, OSError):
+            break
+        if r:
+            try:
+                chunk = os.read(master_fd, 4096)
+            except OSError:
+                break
+            if not chunk:
+                break
+            buffer += chunk
+            m = URL_PATTERN.search(buffer.decode("utf-8", errors="replace"))
+            if m:
+                return m.group(0)
+    return None
+
+
+def _monitor(alias: str, proc: subprocess.Popen, master_fd: int) -> None:
+    while proc.poll() is None:
+        try:
+            r, _, _ = select.select([master_fd], [], [], 1.0)
+            if r:
+                os.read(master_fd, 4096)
+        except OSError:
+            break
+
+    proc.wait()
+    try:
+        os.close(master_fd)
+    except OSError:
+        pass
+
+    if alias in sessions and sessions[alias]["proc"] is proc:
+        sessions.pop(alias, None)
+        logger.info("Session [%s] terminated unexpectedly", alias)
+        if _bot_loop and _bot_app:
+            asyncio.run_coroutine_threadsafe(
+                _bot_app.bot.send_message(
+                    chat_id=config["allowed_chat_id"],
+                    text=f"[{alias}] 세션이 예기치 않게 종료되었습니다.",
+                ),
+                _bot_loop,
+            )
+
+
+async def launch_session(alias: str, resume: bool) -> tuple[str | None, str | None]:
+    project_path = Path(config["projects_root"]) / alias
+
+    claude_bin = config.get("claude_bin") or shutil.which("claude")
+    if not claude_bin:
+        return None, "claude 바이너리를 찾을 수 없습니다. PATH를 확인해주세요."
+
+    if not project_path.is_dir():
+        return None, f"디렉토리가 존재하지 않습니다: {project_path}"
+
+    cmd = [claude_bin, "--remote-control"]
+    if resume:
+        uuid = find_latest_session_uuid(alias)
+        if not uuid:
+            return None, f"[{alias}]의 이전 세션을 찾을 수 없습니다."
+        cmd += ["--resume", uuid]
+
+    if alias in sessions:
+        kill_session(alias)
+        await asyncio.sleep(1)
+
+    master_fd, slave_fd = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(project_path),
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+        )
+    finally:
+        os.close(slave_fd)
+
+    url = await asyncio.to_thread(_capture_url, master_fd)
+
+    if url is None:
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            proc.kill()
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        return None, f"[{alias}] 세션 URL을 가져오지 못했습니다 (타임아웃)."
+
+    sessions[alias] = {"proc": proc, "master_fd": master_fd, "url": url}
+    threading.Thread(target=_monitor, args=(alias, proc, master_fd), daemon=True).start()
+    logger.info("Session [%s] started: %s", alias, url)
+    return url, None
+
+
+def _start_keyboard(projects: list[str]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(f"🆕 {p}", callback_data=f"start:{p}"),
+            InlineKeyboardButton(f"↩️ {p}", callback_data=f"resume:{p}"),
+        ]
+        for p in projects
+    ]
+    return InlineKeyboardMarkup(rows)
+
+
+def _stop_keyboard(aliases: list[str]) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(a, callback_data=f"stop:{a}")] for a in aliases]
+    return InlineKeyboardMarkup(rows)
+
+
+async def cmd_ping(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    await update.effective_chat.send_message("pong")
+
+
+async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    projects = get_projects()
+    if not projects:
+        await update.effective_chat.send_message("프로젝트가 없습니다.")
+        return
+    await update.effective_chat.send_message(
+        "사용 가능한 프로젝트:\n" + "\n".join(f"• {p}" for p in projects)
+    )
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    projects = get_projects()
+    if not projects:
+        await update.effective_chat.send_message("프로젝트가 없습니다.")
+        return
+    await update.effective_chat.send_message(
+        "프로젝트를 선택하세요:",
+        reply_markup=_start_keyboard(projects),
+    )
+
+
+async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    running = list(sessions.keys())
+    if len(running) == 0:
+        await update.effective_chat.send_message("실행 중인 세션이 없습니다.")
+    elif len(running) == 1:
+        alias = running[0]
+        kill_session(alias)
+        await update.effective_chat.send_message(f"[{alias}] 세션을 종료했습니다.")
+    else:
+        await update.effective_chat.send_message(
+            "종료할 세션을 선택하세요:",
+            reply_markup=_stop_keyboard(running),
+        )
+
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_authorized(update):
+        return
+    if not sessions:
+        await update.effective_chat.send_message("실행 중인 세션이 없습니다.")
+        return
+    lines = [f"• {alias}: {info['url']}" for alias, info in sessions.items()]
+    await update.effective_chat.send_message("실행 중인 세션:\n" + "\n".join(lines))
+
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    if not is_authorized(update):
+        return
+
+    if ":" not in query.data:
+        return
+
+    action, alias = query.data.split(":", 1)
+
+    if action in ("start", "resume"):
+        resume = action == "resume"
+        action_text = "재개" if resume else "시작"
+        await query.edit_message_text(f"[{alias}] 세션을 {action_text}합니다...")
+        url, error = await launch_session(alias, resume)
+        if error:
+            await query.edit_message_text(f"오류: {error}")
+        else:
+            await query.edit_message_text(url)
+
+    elif action == "stop":
+        if alias not in sessions:
+            await query.edit_message_text(f"[{alias}] 실행 중인 세션이 없습니다.")
+            return
+        kill_session(alias)
+        await query.edit_message_text(f"[{alias}] 세션을 종료했습니다.")
+
+
+async def post_shutdown(app: Application) -> None:
+    for alias in list(sessions.keys()):
+        kill_session(alias)
+    logger.info("All sessions terminated")
+
+
+async def post_init(app: Application) -> None:
+    global _bot_loop, _bot_app
+    _bot_loop = asyncio.get_running_loop()
+    _bot_app = app
+    commands = [
+        BotCommand("ping", "Check if the bot is alive"),
+        BotCommand("list", "Show available projects"),
+        BotCommand("start", "Start a Claude session"),
+        BotCommand("stop", "Stop a running session"),
+        BotCommand("status", "Show running sessions"),
+    ]
+    await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
+    await app.bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
+    logger.info("Bot initialized")
+
+
+def main() -> None:
+    setup_logging()
+    load_config()
+
+    if not Path(config["projects_root"]).is_dir():
+        logger.error("projects_root does not exist: %s", config["projects_root"])
+        raise SystemExit(1)
+
+    app = (
+        Application.builder()
+        .token(config["bot_token"])
+        .post_init(post_init)
+        .post_shutdown(post_shutdown)
+        .build()
+    )
+    app.add_handler(CommandHandler("ping", cmd_ping))
+    app.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("stop", cmd_stop))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CallbackQueryHandler(on_callback))
+
+    logger.info("Starting bot...")
+    app.run_polling(drop_pending_updates=True)
+
+
+if __name__ == "__main__":
+    main()
