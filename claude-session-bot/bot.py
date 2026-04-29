@@ -202,13 +202,22 @@ async def launch_session(alias: str, resume: bool) -> tuple[str | None, str | No
 
 def _start_keyboard(projects: list[str]) -> InlineKeyboardMarkup:
     rows = [
-        [
-            InlineKeyboardButton(f"🆕 {p}", callback_data=f"start:{p}"),
-            InlineKeyboardButton(f"↩️ {p}", callback_data=f"resume:{p}"),
-        ]
-        for p in projects
+        [InlineKeyboardButton(projects[i], callback_data=f"pick:{projects[i]}")]
+        + ([InlineKeyboardButton(projects[i + 1], callback_data=f"pick:{projects[i + 1]}")] if i + 1 < len(projects) else [])
+        for i in range(0, len(projects), 2)
     ]
+    rows.append([InlineKeyboardButton("✕", callback_data="dismiss")])
     return InlineKeyboardMarkup(rows)
+
+
+def _action_keyboard(alias: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🆕 New session", callback_data=f"start:{alias}"),
+            InlineKeyboardButton("↩️ Resume", callback_data=f"resume:{alias}"),
+        ],
+        [InlineKeyboardButton("← Back", callback_data="back"), InlineKeyboardButton("✕", callback_data="dismiss")],
+    ])
 
 
 def _stop_keyboard(aliases: list[str]) -> InlineKeyboardMarkup:
@@ -381,10 +390,23 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not is_authorized(update):
         return
 
+    if query.data == "back":
+        projects = get_projects()
+        await query.edit_message_text("프로젝트를 선택하세요:", reply_markup=_start_keyboard(projects))
+        return
+
+    if query.data == "dismiss":
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+
     if ":" not in query.data:
         return
 
     action, alias = query.data.split(":", 1)
+
+    if action == "pick":
+        await query.edit_message_text(f"{alias}", reply_markup=_action_keyboard(alias))
+        return
 
     if action in ("start", "resume"):
         resume = action == "resume"
