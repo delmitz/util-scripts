@@ -9,6 +9,7 @@ import select
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -429,6 +430,23 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         await query.edit_message_reply_markup(reply_markup=None)
 
 
+_network_error_count = 0
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    global _network_error_count
+    from telegram.error import NetworkError, TimedOut
+    if isinstance(context.error, (NetworkError, TimedOut)):
+        _network_error_count += 1
+        logger.warning("Network error #%d: %s", _network_error_count, context.error)
+        if _network_error_count >= 5:
+            logger.error("Too many consecutive network errors — restarting process")
+            sys.exit(1)
+    else:
+        _network_error_count = 0
+        logger.error("Unhandled exception", exc_info=context.error)
+
+
 async def post_shutdown(app: Application) -> None:
     for alias in list(sessions.keys()):
         kill_session(alias)
@@ -465,6 +483,9 @@ def main() -> None:
     app = (
         Application.builder()
         .token(config["bot_token"])
+        .connect_timeout(10.0)
+        .read_timeout(30.0)
+        .write_timeout(10.0)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()
@@ -478,6 +499,7 @@ def main() -> None:
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("updatebot", cmd_update))
     app.add_handler(CallbackQueryHandler(on_callback))
+    app.add_error_handler(on_error)
 
     logger.info("Starting bot...")
     app.run_polling(drop_pending_updates=True)
