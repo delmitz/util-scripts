@@ -24,6 +24,8 @@ from telegram import (
 )
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
+VERSION = "202605031600"
+
 CONFIG_PATH = Path.home() / ".claude-session-bot" / "config.json"
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 BOT_SCRIPT = Path.home() / ".claude-session-bot" / "bot.py"
@@ -370,18 +372,20 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.effective_chat.send_message("Update complete. Restarting service...")
 
     subprocess.Popen(
-        ["bash", "-c", f"sleep 1 && launchctl unload '{PLIST_FILE}' 2>/dev/null; launchctl load '{PLIST_FILE}'"]
+        ["bash", "-c", f"sleep 1 && launchctl unload '{PLIST_FILE}' 2>/dev/null; launchctl load '{PLIST_FILE}'"],
+        start_new_session=True,
     )
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_authorized(update):
         return
-    if not sessions:
-        await update.effective_chat.send_message("실행 중인 세션이 없습니다.")
-        return
-    lines = [f"• {alias}: {info['url']}" for alias, info in sessions.items()]
-    await update.effective_chat.send_message("실행 중인 세션:\n" + "\n".join(lines))
+    lines = [f"ver.{VERSION}"]
+    if sessions:
+        lines += [f"• {alias}: {info['url']}" for alias, info in sessions.items()]
+    else:
+        lines.append("실행 중인 세션이 없습니다.")
+    await update.effective_chat.send_message("\n".join(lines))
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -469,6 +473,7 @@ async def post_init(app: Application) -> None:
     ]
     await app.bot.set_my_commands(commands, scope=BotCommandScopeDefault())
     await app.bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
+    await app.bot.send_message(chat_id=config["allowed_chat_id"], text=f"Bot started. ver.{VERSION}")
     logger.info("Bot initialized")
 
 
