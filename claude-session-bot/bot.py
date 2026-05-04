@@ -24,7 +24,7 @@ from telegram import (
 )
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
-VERSION = "202605031600"
+VERSION = "202605041200"
 
 CONFIG_PATH = Path.home() / ".claude-session-bot" / "config.json"
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -32,7 +32,13 @@ BOT_SCRIPT = Path.home() / ".claude-session-bot" / "bot.py"
 PLIST_FILE = Path.home() / "Library" / "LaunchAgents" / "com.user.claude-session-bot.plist"
 REPO_RAW = "https://raw.githubusercontent.com/delmitz/util-scripts/main/claude-session-bot"
 URL_PATTERN = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
-ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+ANSI_ESCAPE = re.compile(
+    r"\x1b(?:"
+    r"\[[0-?]*[ -/]*[@-~]"       # CSI sequences  e.g. \x1b[1m
+    r"|\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC sequences  e.g. \x1b]0;title\x07
+    r"|[ -~]"                    # any other 2-byte sequence e.g. \x1b7 \x1b8
+    r")"
+)
 URL_TIMEOUT = 30
 
 config: dict = {}
@@ -119,6 +125,7 @@ def _capture_url(master_fd: int) -> str | None:
             m = URL_PATTERN.search(text)
             if m:
                 return m.group(0)
+    logger.warning("_capture_url failed. raw_tail=%r", buffer[-2000:])
     return None
 
 
