@@ -24,14 +24,14 @@ from telegram import (
 )
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
-VERSION = "202605041200"
+VERSION = "202605041300"
 
 CONFIG_PATH = Path.home() / ".claude-session-bot" / "config.json"
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 BOT_SCRIPT = Path.home() / ".claude-session-bot" / "bot.py"
 PLIST_FILE = Path.home() / "Library" / "LaunchAgents" / "com.user.claude-session-bot.plist"
 REPO_RAW = "https://raw.githubusercontent.com/delmitz/util-scripts/main/claude-session-bot"
-URL_PATTERN = re.compile(r"https://claude\.ai/code/session_[A-Za-z0-9]+")
+SESSION_PATTERN = re.compile(r"session_[A-Za-z0-9]{15,}")
 ANSI_ESCAPE = re.compile(
     r"\x1b(?:"
     r"\[[0-?]*[ -/]*[@-~]"       # CSI sequences  e.g. \x1b[1m
@@ -122,9 +122,9 @@ def _capture_url(master_fd: int) -> str | None:
                 break
             buffer += chunk
             text = ANSI_ESCAPE.sub("", buffer.decode("utf-8", errors="replace"))
-            m = URL_PATTERN.search(text)
+            m = SESSION_PATTERN.search(text)
             if m:
-                return m.group(0)
+                return f"https://claude.ai/code/{m.group(0)}"
     logger.warning("_capture_url failed. raw_tail=%r", buffer[-2000:])
     return None
 
