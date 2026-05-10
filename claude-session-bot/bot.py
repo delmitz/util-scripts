@@ -24,7 +24,7 @@ from telegram import (
 )
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
-VERSION = "202605041300"
+VERSION = "202605111000"
 
 CONFIG_PATH = Path.home() / ".claude-session-bot" / "config.json"
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
@@ -442,19 +442,26 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 _network_error_count = 0
+_network_error_window_start: float = 0.0
+_NETWORK_ERROR_WINDOW = 600.0  # 10 minutes
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    global _network_error_count
+    global _network_error_count, _network_error_window_start
     from telegram.error import NetworkError, TimedOut
     if isinstance(context.error, (NetworkError, TimedOut)):
+        now = time.monotonic()
+        if _network_error_count == 0 or (now - _network_error_window_start) > _NETWORK_ERROR_WINDOW:
+            _network_error_count = 0
+            _network_error_window_start = now
         _network_error_count += 1
-        logger.warning("Network error #%d: %s", _network_error_count, context.error)
+        logger.warning("Network error #%d (window %.0fs): %s", _network_error_count, now - _network_error_window_start, context.error)
         if _network_error_count >= 5:
             logger.error("Too many consecutive network errors — restarting process")
             sys.exit(1)
     else:
         _network_error_count = 0
+        _network_error_window_start = 0.0
         logger.error("Unhandled exception", exc_info=context.error)
 
 
